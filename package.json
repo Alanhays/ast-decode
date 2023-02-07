@@ -1,0 +1,10 @@
+{
+  "name": "ast-decode",
+  "version": "1.0.0",
+  "dependencies": {
+    "@babel/generator": "^7.20.14",
+    "@babel/parser": "^7.20.13",
+    "@babel/traverse": "^7.20.13",
+    "@babel/types": "^7.20.7"
+  }
+}
