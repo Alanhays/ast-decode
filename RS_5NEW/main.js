@@ -25,12 +25,23 @@ const EXPRESSION_LOG = false;
 const IF_LOG = false;
 
 //  声明变量
-const globalEval = eval;
-let scope = ["main"];
-let index;
+let scope = [{name: "main", index: 0}];
 let funcInfo = {};
-let initCode;
 let nextBody;
+
+function getScopeInfo(key) {
+    return funcInfo[scope.slice(-1)[0]["name"]][key];
+}
+
+function newScope(str, index) {
+    scope.push({name: str, index: index})
+}
+
+function indexInfo() {
+    let nowScope = scope.slice(-1)[0];
+    if (!arguments.length) return nowScope["index"];
+    nowScope["index"] = arguments[0];
+}
 
 /**
  * 向上查询某类型的path
@@ -68,7 +79,7 @@ function evaluationExpression(node, name, value) {
         code = code.replace(reg, item[1]);
     });
     !EXPRESSION_LOG || console.log(`${node.type} | ${_code} | ${code}`);
-    return globalEval(code);
+    return this.eval(code);
 }
 
 /**
@@ -118,7 +129,6 @@ function constructSelfExecution(_arguments, bodyNode) {
     };
 }
 
-
 /***
  *  调用函数还原
  * @param path
@@ -129,11 +139,17 @@ function callRestore(path) {
         CallExpression(path) {
             let name = path.node.callee.name;
             if (Object.keys(funcInfo).includes(name)) {
+                let value = path.node.arguments[0].value;
                 //  更新作用域
-                scope.push(name);
-                let list = getProcess(path.node.arguments[0].value);
+                newScope(name, value);
+                let list = getProcess();
                 //  构造自执行函数node
-                let newNode = constructSelfExecution(path.node.arguments, list)
+                let newNode = constructSelfExecution(path.node.arguments, list);
+                if (name === "_$3d" && value === 152) {
+                    let code = nodeFilter(newNode.expression.callee.body.body, ['ReturnStatement'], true);
+                    console.log(code)
+                    this.eval(code);
+                }
                 path.replaceInline(newNode)
             }
         }
@@ -144,123 +160,76 @@ function callRestore(path) {
  * 获取执行代码
  * 递归遍历if节点获取index下真正执行的code
  * @param path  IfStatement类型的path
- * @param index {number} 瑞数 5代新版的数组指针
  * @returns {*} node或 nodeList
  */
-function getBody(path, index) {
+function getBody(path) {
     if (path === undefined) return;
     //  es6语法 等价于 const node = path;
     const {node} = path;
     const {consequent, alternate, test} = node;
+    //  还原调用
+    if (!path.isIfStatement() || types.isCallExpression(test)) {
+        callRestore(path.parentPath)
+    }
 
     //  当修改了指针的时候
     if (path.isExpressionStatement() &&
         types.isAssignmentExpression(node.expression) &&
         node.expression.left.name === getScopeInfo("indexName")) {
-        return evaluationExpression(node, getScopeInfo("indexName"), ++index);
+        return evaluationExpression(node, getScopeInfo("indexName"), ++scope.slice(-1)[0]['index']);
     }
 
     //  return节点和不是if节点直接返回
     if (!path.isIfStatement() || path.isReturnStatement()) {
-        nextBody.forEach(n => {
-        if (types.isExpressionStatement(n) &&
-            types.isCallExpression(n.expression) &&
-            n.expression.callee.name === "_$3m") {
-            console.log(`${n.expression.callee.name}-----------------------------------------`)
-            nextBody[nextBody.indexOf(n)] = coreCallRestore(n);
-        }
-    })
-        callRestore(path)
         return nextBody.length > 1 ? nextBody : node;
     }
-
     //  读取表达式中变量的值
-    let value = globalEval(getScopeInfo("arrayName"))[index];
+    let value = this.eval(getScopeInfo("arrayName"))[indexInfo()];
     let expressionResult;
     //  test节点为call类型 无法计算test节点结果 还原调用后计算其结果
     if (types.isCallExpression(test)) {
-        callRestore(path)
         expressionResult = eval(generator(types.expressionStatement(node.test)).code);
     } else {
-        if (path.isUnaryExpression()) {
+        if (types.isUnaryExpression(test)) {
             /** 专项处理特殊代码 -> if (!_$2L) {_$ex += 2;}
              * 开始尝试获取_$2L的值，然后发现行不通。
              *  虽然不知道表达式的值 但是能知道if代码块需要执行的代码
              *  _$ex也就是指针 更新指针然后继续递归拿到code 然后替换这个if的consequent不就行了
              */
-            let _index = evaluationExpression(consequent.body[0], getScopeInfo("indexName"), index);
+            let _index = JSON.parse(JSON.stringify(indexInfo()));
+            _index = evaluationExpression(consequent.body[0], getScopeInfo("indexName"), ++_index);
+            newScope(scope.slice(-1)[0]["name"], _index);
             //  替换consequent.body
-            node.consequent.body = getProcess(_index);
+            node.consequent.body = getProcess();
             return node;
         }
         //  计算表达式的值
         expressionResult = evaluationExpression(test, getScopeInfo("expressionVariableName"), value);
     }
-
     //  根据结果选择节点向下遍历直到拿到node（选择左右节点）
     nextBody = expressionResult ? consequent.body : alternate.body;
     let nodeStr = expressionResult ? 'consequent' : 'alternate';
     !IF_LOG || console.log(generator(nextBody[0]).code);
     let endIndex = nextBody.length - 1;
     if (nextBody[endIndex] === null) return;
-    let result = getBody(path.get(`${nodeStr}.body.${endIndex}`), index);
-    //  专项处理大数组偏移
-    if (scope.length === 1 && result === 0 && nextBody.length > 1) {
-
-        //  执行数组偏移代码
-        //
-        console.log(index, result);
-    }
-    //  处理核心函数调用 _$NM(2, _$fL)|_$rJ(7, _$Cl)|_$3m(0)|_$3d(0);
-    nextBody.forEach(n => {
-        if (types.isExpressionStatement(n) &&
-            types.isCallExpression(n.expression) &&
-            Object.keys(funcInfo).includes(n.expression.callee.name)) {
-            console.log(`${n.expression.callee.name}-----------------------------------------`)
-            nextBody[nextBody.indexOf(n)] = coreCallRestore(n);
-        }
-    })
     //  继续深度遍历
-    return result;
-}
-
-/**
- * 核心调用还原
- * @param node 瑞数 5代新版的更新指针的调用入口 nod
- */
-function coreCallRestore(node) {
-    let calleeIdentifier = node.expression.callee.name;
-    scope.push(calleeIdentifier);
-    let _index = node.expression.arguments[0].value;
-    initCode = nodeFilter(getScopeInfo('initVariableDeclaration'), ['VariableDeclaration']);
-    let paramName = getScopeInfo('path').node.params[0].name;
-    globalEval(initCode.replace(new RegExp(paramName.replace(/\$/g, '\\$'), 'g'), index));
-    let process = getProcess(_index);
-    scope.push(calleeIdentifier);
-    let newNode = constructSelfExecution(node.expression.arguments, process);
-    let code = nodeFilter([newNode], ['ReturnStatement'], true);
-    console.log(code)
-    if (calleeIdentifier === "_$3d") globalEval(code);
-    if (scope.length > 1) scope.pop();
-    return newNode;
+    return getBody(path.get(`${nodeStr}.body.${endIndex}`));
 }
 
 /***
  * 获取执行流程code
  * 模拟while循环遍历if节点，并且返回被执行的nodeList
- * @param index
  * @returns {*[]}
  */
-function getProcess(index) {
-    let path = getScopeInfo('startPath');
+function getProcess() {
     let bodyList = [], result;
     //  模拟while循环
     while (1) {
         //  递归获取真正执行的代码块
-        result = getBody(path, index);
+        result = getBody(getScopeInfo('startPath'));
         //  更新指针
         if (typeof result === "number") {
-            index = result;
+            indexInfo(result);
             continue;
         }
         if (Array.isArray(result)) {
@@ -272,20 +241,11 @@ function getProcess(index) {
         }
         //  返回node为return或If类型则结束循环
         if (types.isReturnStatement(result) || types.isIfStatement(result)) break;
-        index++;
+        scope.slice(-1)[0]['index']++;
     }
     //  退出当前作用域
     if (scope.length > 1) scope.pop();
     return bodyList;
-}
-
-/***
- * 获取作用域信息
- * @param key
- * @returns {*}
- */
-function getScopeInfo(key) {
-    return funcInfo[scope[scope.length - 1]][key];
 }
 
 /***
@@ -297,11 +257,12 @@ function getFuncInfo(path, resultPath) {
     let info = {};
     info["startPath"] = path.get('body.body.1');
     let expressionNode = path.node.body.body[0];
+    let arrayName = expressionNode.expression.right.object.name;
     info["expressionVariableName"] = expressionNode.expression.left.name;
-    info["arrayName"] = expressionNode.expression.right.object.name;
+    info["arrayName"] = generator(path.scope.getBinding(arrayName).path.node.init).code;
     info["indexName"] = expressionNode.expression.right.property.argument.name;
-    info["originalArrayName"] = path.scope.getBinding(info["arrayName"]).path.node.init.object.name;
-    info["whilePath"] = path;
+    // info["originalArrayName"] = path.scope.getBinding(info["arrayName"]).path.node.init.object.name;
+    // info["whilePath"] = path;
     info["path"] = resultPath;
     info["initVariableDeclaration"] = nodeFilter(path.getAllPrevSiblings(), ['VariableDeclaration'], false, false);
     return info;
@@ -315,7 +276,7 @@ const cacheCriticalData = {
     WhileStatement(path) {
         let resultPath = findParentPath(path, "FunctionDeclaration");
         if (!resultPath) return;
-        let funcName = scope[0];
+        let funcName = scope[0]["name"];
         if (!resultPath.isFunctionExpression()) {
             funcName = resultPath.node.id.name;
         }
@@ -333,13 +294,16 @@ const controlFlowFlattening = {
         let resultPath = findParentPath(path, "FunctionDeclaration");
         if (!resultPath) return;
         if (resultPath.isFunctionExpression()) {
-            let codeNode = getProcess(globalEval(getScopeInfo("indexName")));
-            let code = nodeFilter(codeNode, ['ReturnStatement', 'CallExpression'], true)
+            let mainVariableCode = nodeFilter(getScopeInfo("initVariableDeclaration"), ['VariableDeclaration']);
+            this.eval(mainVariableCode);
+            indexInfo(this.eval(getScopeInfo("indexName")));
+            let codeNode = getProcess();
+            let code = nodeFilter(codeNode, ['ReturnStatement', 'CallExpression'], true);
             console.log(code)
             codeNode.forEach(n => {
                 path.insertBefore(n)
             })
-            path.remove()
+            path.remove();
         }
     }
 }
@@ -390,15 +354,11 @@ console.log("规范if else节点...")
 traverse(ast, specificationIfElse);
 console.log("缓存关键数据...")
 traverse(ast, cacheCriticalData)
-console.log("初始化变量...")
-let mainVariableCode = nodeFilter(getScopeInfo("initVariableDeclaration"), ['VariableDeclaration']);
-globalEval(mainVariableCode)
 console.log("控制流平坦化...")
 traverse(ast, controlFlowFlattening);
 console.timeEnd("处理完毕，耗时");
 
 //生成新的js code，并保存到文件中输出
 let {code} = generator(ast, opts = {jsescOption: {"minimal": true}});
-
 fs.writeFile(decode_file, code, (err) => {
 });
