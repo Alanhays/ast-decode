@@ -107,7 +107,6 @@ traverse(ast, simplifyLiteral);
 
 //可能会误删一些代码，可屏蔽
 traverse(ast, deleteObfuscatorCode);
-t.ExpressionStatement()
 
 console.timeEnd("处理完毕，耗时");
 
