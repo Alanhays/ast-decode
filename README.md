@@ -22,9 +22,3 @@ encode 混淆/加密后的代码
 
 decode_result 解密/解混淆后的代码
 
-## 联系方式
-![](my.jpg)
-
-微信:AlanHays
-
-Email : 2757317548@qq.com
